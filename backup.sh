@@ -1,0 +1,208 @@
+#!/bin/bash
+
+# Chemin du fichier de configuration
+CONFIG_FILE="config.conf"
+
+# Vérifier si le fichier de configuration existe
+function check_config_file() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "Erreur: Le fichier de configuration \"$CONFIG_FILE\" n'existe pas."
+        exit 1
+    fi
+}
+
+# Lire le fichier de configuration et effectuer les sauvegardes pour chaque base de données spécifiée
+function read_config_and_backup() {
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ ^\[.*\]$ ]]; then
+            db_name=$(echo "$line" | tr -d '[]')
+            perform_backup "$db_name"
+        fi
+    done < "$CONFIG_FILE"
+}
+
+# Fonction pour effectuer la sauvegarde
+function perform_backup() {
+    local db_name="$1"
+    local backup_datetime="$(date +'%Y%m%d_%H%M%S')"
+    local backup_file="${backup_datetime}_${db_name}.tar.gz"
+    local mysql_user=""
+    local mysql_password=""
+    local keep_versions=0
+    local local_backup_path=""
+    local s3_bucket_name=""
+    local interval_days=0
+    local folders_to_save=""
+
+
+    # Récupérer les paramètres de configuration pour la base de données spécifiée
+    while IFS="=" read -r key value; do
+        key=$(echo "$key" | tr '[:lower:]' '[:upper:]' | xargs) # Convertir la clé en majuscules sans espaces
+        value=$(echo "$value" | xargs) # Supprimer les espaces en début et fin de valeur
+
+        case "$key" in
+            MYSQL_USER) mysql_user="$value" ;;
+            MYSQL_PASSWORD) mysql_password="$value" ;;
+            KEEP_VERSIONS) keep_versions="$value" ;;
+            LOCAL_BACKUP_PATH) local_backup_path="$value" ;;
+            S3_BUCKET_NAME) s3_bucket_name="$value" ;;
+            INTERVAL_DAYS) interval_days="$value" ;;
+            FOLDER_TO_SAVE) folders_to_save="$value" ;;
+        esac
+    done < <(grep -E "^\[$db_name\]$|^(MYSQL_USER|MYSQL_PASSWORD|KEEP_VERSIONS|LOCAL_BACKUP_PATH|S3_BUCKET_NAME|INTERVAL_DAYS|FOLDER_TO_SAVE)=" "$CONFIG_FILE")
+
+    # Vérifier si la section de configuration existe dans le fichier de configuration
+    if [ -z "$mysql_user" ] || [ -z "$mysql_password" ]; then
+        echo "Erreur: Les informations de connexion MYSQL_USER ou MYSQL_PASSWORD ne sont pas définies pour la base de données [$db_name]."
+        exit 1
+    fi
+
+    # Vérifier si une nouvelle sauvegarde est nécessaire en fonction de l'intervalle de jours spécifié
+    if should_perform_backup "$local_backup_path" "$db_name" "$interval_days"; then
+        # Effectuer la sauvegarde de la base de données
+        backup_database "$db_name" "$mysql_user" "$mysql_password" "$local_backup_path" "$backup_datetime"
+
+        # Créer une archive tar.gz avec la date et l'heure dans le nom du fichier
+        create_tar_archive "$local_backup_path" "$db_name" "$backup_datetime" "$backup_file"
+
+        # Appeler la fonction pour sauvegarder les dossiers spécifiés
+        backup_folders "$folders_to_save" "$local_backup_path" "$backup_datetime"
+
+        # Transférer la sauvegarde vers le bucket S3
+        transfer_to_s3 "$local_backup_path" "$backup_file" "$s3_bucket_name" "$db_name"
+
+        # Supprimer les anciennes versions de sauvegardes en gardant seulement les dernières N versions
+        cleanup_old_backups "$local_backup_path" "$db_name" "$keep_versions"
+
+        echo "Sauvegarde terminée pour la base de données : $db_name"
+        echo "-------------------------------------------------"
+    else
+        echo "L'intervalle de jours pour la base de données [$db_name] n'est pas dépassé (Intervalle : $interval_days jours). Pas de nouvelle sauvegarde."
+    fi
+}
+
+# Vérifier si une nouvelle sauvegarde est nécessaire en fonction de l'intervalle de jours spécifié
+function should_perform_backup() {
+    local local_backup_path="$1"
+    local db_name="$2"
+    local interval_days="$3"
+    local interval_seconds=$((interval_days * 86400)) # Convertir l'intervalle de jours en secondes
+    local margin_of_error=60 # Marge d'erreur en secondes (par exemple, 60 secondes)
+
+    # Vérifier s'il y a des fichiers de sauvegarde existants dans le répertoire local
+    latest_backup_file=$(find "${local_backup_path}/database" -maxdepth 1 -type f -name "*_${db_name}.tar.gz" | sort -r | head -n 1)
+
+    if [ -z "$latest_backup_file" ]; then
+        # Aucun fichier de sauvegarde trouvé, effectuer la sauvegarde
+        return 0
+    else
+        # Fichier de sauvegarde trouvé, vérifier si une nouvelle sauvegarde est nécessaire
+        last_backup_date=$(echo "$latest_backup_file" | sed -n 's/.*\([0-9]\{8\}\)_[0-9]\{6\}.*/\1/p')
+        last_backup_timestamp=$(date -d "$last_backup_date" +"%s")
+        current_timestamp=$(date +"%s")
+        time_difference=$((current_timestamp - last_backup_timestamp))
+
+        if [ "$time_difference" -ge "$((interval_seconds - margin_of_error))" ]; then
+            # Interval de jours dépassé ou marge d'erreur atteinte, effectuer la sauvegarde
+            return 0
+        else
+            # Interval de jours non dépassé, pas de nouvelle sauvegarde nécessaire
+            return 1
+        fi
+    fi
+}
+
+# Effectuer la sauvegarde de la base de données
+function backup_database() {
+    local db_name="$1"
+    local mysql_user="$2"
+    local mysql_password="$3"
+    local local_backup_path="$4"
+    local backup_datetime="$5"
+
+    # Créer un répertoire temporaire pour effectuer l'archivage
+    local temp_backup_dir="${local_backup_path}/database/temp_${db_name}_${backup_datetime}"
+    mkdir -p "$temp_backup_dir"
+
+    echo "---- Sauvegarde de la base de données : $db_name ----"
+    echo "Date/Heure de la sauvegarde : $backup_datetime"
+    echo "Répertoire temporaire : $temp_backup_dir"
+
+    # Effectuer la sauvegarde de la base de données
+    mysqldump -u "$mysql_user" -p"$mysql_password" "$db_name" > "${temp_backup_dir}/${db_name}.sql"
+}
+
+# Créer une archive tar.gz avec la date et l'heure dans le nom du fichier
+function create_tar_archive() {
+    local local_backup_path="$1"
+    local db_name="$2"
+    local backup_datetime="$3"
+    local backup_file="$4"
+
+    cd "${local_backup_path}/database" || exit 1
+    tar -czf "$backup_file" "temp_${db_name}_${backup_datetime}/${db_name}.sql"
+
+    # Supprimer le répertoire temporaire
+    rm -r "${local_backup_path}/database/temp_${db_name}_${backup_datetime}"
+
+    # Revenir au répertoire initial
+    cd - || exit 1
+}
+
+function backup_folders() {
+    local folders_to_save="$1"
+    local local_backup_path="$2"
+    local backup_datetime="$3"
+
+    IFS=';' read -ra folders <<< "$folders_to_save"
+    for folder_path in "${folders[@]}"; do
+        folder_name=$(basename "$folder_path")
+        target_folder="${local_backup_path}/files/${folder_name}"
+
+        if [ -d "$folder_path" ]; then
+            echo "---- Sauvegarde du dossier : $folder_path ----"
+            mkdir -p "$target_folder"
+            rsync -av --ignore-existing "$folder_path/" "$target_folder/"
+        else
+            echo "Le dossier spécifié n'existe pas : $folder_path"
+        fi
+    done
+}
+
+# Transférer la sauvegarde vers le bucket S3
+function transfer_to_s3() {
+    local local_backup_path="$1"
+    local backup_file="$2"
+    local s3_bucket_name="$3"
+    local db_name="$4"
+
+    echo "Transfert de la sauvegarde vers S3..."
+    rclone --size-only sync "${local_backup_path}" "${s3_bucket_name}"
+}
+
+# Supprimer les anciennes versions de sauvegardes en gardant seulement les dernières N versions
+function cleanup_old_backups() {
+    local local_backup_path="$1"
+    local db_name="$2"
+    local keep_versions="$3"
+
+    cd "$local_backup_path" || exit 1
+    backup_count=$(ls -1 | grep -E "^[0-9]{8}_[0-9]{6}_${db_name}.*\.tar\.gz$" | wc -l)
+
+    if [ "$backup_count" -gt "$keep_versions" ]; then
+        ls -1t | grep -E "^[0-9]{8}_[0-9]{6}_${db_name}.*\.tar\.gz$" | tail -n +"$((keep_versions + 1))" | xargs -I {} rm {}
+        echo "Anciennes sauvegardes supprimées (Garder les dernières $keep_versions versions)"
+    else
+        echo "Nombre de sauvegardes actuelles : $backup_count (Garder les dernières $keep_versions versions)"
+    fi
+}
+
+# Fonction principale du script
+function main() {
+    check_config_file
+    read_config_and_backup
+    echo "Toutes les sauvegardes ont été effectuées avec succès."
+}
+
+# Appel de la fonction principale
+main
