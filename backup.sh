@@ -1,7 +1,10 @@
 #!/bin/bash
 
-# Chemin du fichier de configuration
-CONFIG_FILE="config.conf"
+# Chemin du script
+SCRIPT_PATH=$(dirname "$0")
+
+# Chemin du fichier de configuration en utilisant le chemin du script
+CONFIG_FILE="$SCRIPT_PATH/config.conf"
 
 # Vérifier si le fichier de configuration existe
 function check_config_file() {
@@ -13,19 +16,35 @@ function check_config_file() {
 
 # Lire le fichier de configuration et effectuer les sauvegardes pour chaque base de données spécifiée
 function read_config_and_backup() {
+    local section=""
+    local section_content=""
+    
     while IFS= read -r line || [[ -n "$line" ]]; do
-        if [[ "$line" =~ ^\[.*\]$ ]]; then
-            db_name=$(echo "$line" | tr -d '[]')
-            perform_backup "$db_name"
+        if [[ "$line" =~ ^\[(.*)\]$ ]]; then
+            if [ -n "$section" ]; then
+                process_section "$section" "$section_content"
+                section_content=""
+            fi
+            section="${BASH_REMATCH[1]}"
+        else
+            section_content+="$line"$'\n'
         fi
     done < "$CONFIG_FILE"
+
+    if [ -n "$section" ]; then
+        process_section "$section" "$section_content"
+    fi
 }
 
-# Fonction pour effectuer la sauvegarde
-function perform_backup() {
+# Traiter une section de configuration
+function process_section() {
+    local section_name="$1"
+    local section_content="$2"
     local db_name="$1"
+
     local backup_datetime="$(date +'%Y%m%d_%H%M%S')"
     local backup_file="${backup_datetime}_${db_name}.tar.gz"
+
     local mysql_user=""
     local mysql_password=""
     local keep_versions=0
@@ -34,11 +53,9 @@ function perform_backup() {
     local interval_days=0
     local folders_to_save=""
 
-
-    # Récupérer les paramètres de configuration pour la base de données spécifiée
     while IFS="=" read -r key value; do
-        key=$(echo "$key" | tr '[:lower:]' '[:upper:]' | xargs) # Convertir la clé en majuscules sans espaces
-        value=$(echo "$value" | xargs) # Supprimer les espaces en début et fin de valeur
+        key=$(echo "$key" | tr '[:lower:]' '[:upper:]' | xargs)
+        value=$(echo "$value" | xargs)
 
         case "$key" in
             MYSQL_USER) mysql_user="$value" ;;
@@ -49,11 +66,11 @@ function perform_backup() {
             INTERVAL_DAYS) interval_days="$value" ;;
             FOLDER_TO_SAVE) folders_to_save="$value" ;;
         esac
-    done < <(grep -E "^\[$db_name\]$|^(MYSQL_USER|MYSQL_PASSWORD|KEEP_VERSIONS|LOCAL_BACKUP_PATH|S3_BUCKET_NAME|INTERVAL_DAYS|FOLDER_TO_SAVE)=" "$CONFIG_FILE")
+    done <<< "$section_content"
 
-    # Vérifier si la section de configuration existe dans le fichier de configuration
+    # Vérifier si les informations de connexion sont définies
     if [ -z "$mysql_user" ] || [ -z "$mysql_password" ]; then
-        echo "Erreur: Les informations de connexion MYSQL_USER ou MYSQL_PASSWORD ne sont pas définies pour la base de données [$db_name]."
+        echo "Erreur: Les informations de connexion MYSQL_USER ou MYSQL_PASSWORD ne sont pas définies pour la base de données [$section_name]."
         exit 1
     fi
 
@@ -80,6 +97,7 @@ function perform_backup() {
         echo "L'intervalle de jours pour la base de données [$db_name] n'est pas dépassé (Intervalle : $interval_days jours). Pas de nouvelle sauvegarde."
     fi
 }
+
 
 # Vérifier si une nouvelle sauvegarde est nécessaire en fonction de l'intervalle de jours spécifié
 function should_perform_backup() {
@@ -162,7 +180,7 @@ function backup_folders() {
         if [ -d "$folder_path" ]; then
             echo "---- Sauvegarde du dossier : $folder_path ----"
             mkdir -p "$target_folder"
-            rsync -av --ignore-existing "$folder_path/" "$target_folder/"
+            rsync -a --stats --ignore-existing "$folder_path/" "$target_folder/"
         else
             echo "Le dossier spécifié n'existe pas : $folder_path"
         fi
