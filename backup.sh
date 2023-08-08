@@ -1,5 +1,15 @@
 #!/bin/bash
 
+# Gestion des options en ligne de commande
+force_backup=0  # Valeur par défaut
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -f | --force) force_backup=1 ;;
+        *) ;;
+    esac
+    shift
+done
+
 # Chemin du script
 SCRIPT_PATH=$(dirname "$0")
 
@@ -75,7 +85,7 @@ function process_section() {
     fi
 
     # Vérifier si une nouvelle sauvegarde est nécessaire en fonction de l'intervalle de jours spécifié
-    if should_perform_backup "$local_backup_path" "$db_name" "$interval_days"; then
+    if [ "$force_backup" -eq 1 ] || should_perform_backup "$local_backup_path" "$db_name" "$interval_days"; then
         # Effectuer la sauvegarde de la base de données
         backup_database "$db_name" "$mysql_user" "$mysql_password" "$local_backup_path" "$backup_datetime"
 
