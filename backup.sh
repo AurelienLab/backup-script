@@ -2,12 +2,28 @@
 
 # Gestion des options en ligne de commande
 force_backup=0  # Valeur par défaut
+db_to_backup=""
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -f | --force) force_backup=1 ;;
-        *) ;;
+        -f | --force)
+            force_backup=1
+            shift
+            ;;
+        -d | --database)
+            if [ -n "$2" ]; then
+                db_to_backup="$2"
+                shift 2
+            else
+                echo "Erreur : L'option --database nécessite un argument." >&2
+                exit 1
+            fi
+            ;;
+        *)
+            echo "Option invalide : $1" >&2
+            exit 1
+            ;;
     esac
-    shift
 done
 
 # Chemin du script
@@ -32,7 +48,9 @@ function read_config_and_backup() {
     while IFS= read -r line || [[ -n "$line" ]]; do
         if [[ "$line" =~ ^\[(.*)\]$ ]]; then
             if [ -n "$section" ]; then
-                process_section "$section" "$section_content"
+                if [ -z "$db_to_backup" ] || [ "$db_to_backup" == "$section" ]; then
+                    process_section "$section" "$section_content"
+                fi
                 section_content=""
             fi
             section="${BASH_REMATCH[1]}"
@@ -42,7 +60,9 @@ function read_config_and_backup() {
     done < "$CONFIG_FILE"
 
     if [ -n "$section" ]; then
-        process_section "$section" "$section_content"
+        if [ -z "$db_to_backup" ] || [ "$db_to_backup" == "$section" ]; then
+            process_section "$section" "$section_content"
+        fi
     fi
 }
 
