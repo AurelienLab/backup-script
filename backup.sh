@@ -10,29 +10,28 @@ CONFIG_FILE="$SCRIPT_PATH/config.conf"
 force_backup=0  # Valeur par défaut
 db_to_backup=""
 
-function parse_command_line_options() {
-  while [[ $# -gt 0 ]]; do
-      case "$1" in
-          -f | --force)
-              force_backup=1
-              shift
-              ;;
-          -d | --database)
-              if [ -n "$2" ]; then
-                  db_to_backup="$2"
-                  shift 2
-              else
-                  echo "Erreur : L'option --database nécessite un argument." >&2
-                  exit 1
-              fi
-              ;;
-          *)
-              echo "Option invalide : $1" >&2
-              exit 1
-              ;;
-      esac
-  done
-}
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -f | --force)
+            force_backup=1
+            shift
+            ;;
+        -d | --database)
+            if [ -n "$2" ]; then
+                db_to_backup="$2"
+                shift 2
+            else
+                echo "Erreur : L'option --database nécessite un argument." >&2
+                exit 1
+            fi
+            ;;
+        *)
+            echo "Option invalide : $1" >&2
+            exit 1
+            ;;
+    esac
+done
+
 
 # Vérifier si le fichier de configuration existe
 function check_config_file() {
@@ -106,7 +105,7 @@ function process_section() {
     done <<< "$section_content"
 
     # Vérifier si une nouvelle sauvegarde est nécessaire en fonction de l'intervalle de jours spécifié
-    if [ "$force_backup" -eq 1 ] || should_perform_backup "$local_backup_path" "$db_name" "$interval_days"; then
+    if [ "$force_backup" -eq 1 ] || should_perform_backup "$local_backup_path" "$section_name" "$interval_days"; then
         # Effectuer la sauvegarde de la base de données
         if [ "$db_type" == "mysql" ]; then
             backup_mysql_database "$db_name" "$db_user" "$db_password" "$local_backup_path" "$backup_datetime"
@@ -274,7 +273,6 @@ function cleanup_old_backups() {
 # Fonction principale du script
 function main() {
     check_config_file
-    parse_command_line_options
     read_config_and_backup
     echo "Toutes les sauvegardes ont été effectuées avec succès."
 }
