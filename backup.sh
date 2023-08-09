@@ -1,36 +1,38 @@
 #!/bin/bash
 
-# Gestion des options en ligne de commande
-force_backup=0  # Valeur par défaut
-db_to_backup=""
-
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -f | --force)
-            force_backup=1
-            shift
-            ;;
-        -d | --database)
-            if [ -n "$2" ]; then
-                db_to_backup="$2"
-                shift 2
-            else
-                echo "Erreur : L'option --database nécessite un argument." >&2
-                exit 1
-            fi
-            ;;
-        *)
-            echo "Option invalide : $1" >&2
-            exit 1
-            ;;
-    esac
-done
-
 # Chemin du script
 SCRIPT_PATH=$(dirname "$0")
 
 # Chemin du fichier de configuration en utilisant le chemin du script
 CONFIG_FILE="$SCRIPT_PATH/config.conf"
+
+# Gestion des options en ligne de commande
+force_backup=0  # Valeur par défaut
+db_to_backup=""
+
+function parse_command_line_options() {
+  while [[ $# -gt 0 ]]; do
+      case "$1" in
+          -f | --force)
+              force_backup=1
+              shift
+              ;;
+          -d | --database)
+              if [ -n "$2" ]; then
+                  db_to_backup="$2"
+                  shift 2
+              else
+                  echo "Erreur : L'option --database nécessite un argument." >&2
+                  exit 1
+              fi
+              ;;
+          *)
+              echo "Option invalide : $1" >&2
+              exit 1
+              ;;
+      esac
+  done
+}
 
 # Vérifier si le fichier de configuration existe
 function check_config_file() {
@@ -71,12 +73,14 @@ function process_section() {
     local section_name="$1"
     local section_content="$2"
     local db_name="$1"
+    local db_name=""
+    local db_type=""
+    local db_user=""
+    local db_password=""
 
     local backup_datetime="$(date +'%Y%m%d_%H%M%S')"
     local backup_file="${backup_datetime}_${db_name}.tar.gz"
 
-    local mysql_user=""
-    local mysql_password=""
     local keep_versions=0
     local local_backup_path=""
     local s3_bucket_name=""
@@ -88,8 +92,10 @@ function process_section() {
         value=$(echo "$value" | xargs)
 
         case "$key" in
-            MYSQL_USER) mysql_user="$value" ;;
-            MYSQL_PASSWORD) mysql_password="$value" ;;
+            DB_NAME) db_name="$value" ;;
+            DB_TYPE) db_type="$value" ;;
+            DB_USER) db_user="$value" ;;
+            DB_PASSWORD) db_password="$value" ;;
             KEEP_VERSIONS) keep_versions="$value" ;;
             LOCAL_BACKUP_PATH) local_backup_path="$value" ;;
             S3_BUCKET_NAME) s3_bucket_name="$value" ;;
@@ -98,16 +104,14 @@ function process_section() {
         esac
     done <<< "$section_content"
 
-    # Vérifier si les informations de connexion sont définies
-    if [ -z "$mysql_user" ] || [ -z "$mysql_password" ]; then
-        echo "Erreur: Les informations de connexion MYSQL_USER ou MYSQL_PASSWORD ne sont pas définies pour la base de données [$section_name]."
-        exit 1
-    fi
-
     # Vérifier si une nouvelle sauvegarde est nécessaire en fonction de l'intervalle de jours spécifié
     if [ "$force_backup" -eq 1 ] || should_perform_backup "$local_backup_path" "$db_name" "$interval_days"; then
         # Effectuer la sauvegarde de la base de données
-        backup_database "$db_name" "$mysql_user" "$mysql_password" "$local_backup_path" "$backup_datetime"
+        if [ "$db_type" == "mysql" ]; then
+            backup_mysql_database "$db_name" "$db_user" "$db_password" "$local_backup_path" "$backup_datetime"
+        elif [ "$db_type" == "sqlite" ]; then
+            backup_sqlite_database "$db_name" "$db_file" "$local_backup_path" "$backup_datetime"
+        fi
 
         # Créer une archive tar.gz avec la date et l'heure dans le nom du fichier
         create_tar_archive "$local_backup_path" "$db_name" "$backup_datetime" "$backup_file"
@@ -161,7 +165,7 @@ function should_perform_backup() {
 }
 
 # Effectuer la sauvegarde de la base de données
-function backup_database() {
+function backup_mysql_database() {
     local db_name="$1"
     local mysql_user="$2"
     local mysql_password="$3"
@@ -178,17 +182,39 @@ function backup_database() {
 
     # Effectuer la sauvegarde de la base de données
     mysqldump -u "$mysql_user" -p"$mysql_password" "$db_name" > "${temp_backup_dir}/${db_name}.sql"
+
+    create_tar_archive "$local_backup_path" "${db_name}.sql" "$backup_datetime" "${backup_datetime}_${db_name}.tar.gz"
+}
+
+function backup_sqlite_database() {
+    local db_name="$1"
+    local db_file="$2"
+    local local_backup_path="$4"
+    local backup_datetime="$5"
+
+    # Créer un répertoire temporaire pour effectuer l'archivage
+    local temp_backup_dir="${local_backup_path}/database/temp_${db_name}_${backup_datetime}"
+    mkdir -p "$temp_backup_dir"
+
+    echo "---- Sauvegarde de la base de données : $db_name ----"
+    echo "Date/Heure de la sauvegarde : $backup_datetime"
+    echo "Répertoire temporaire : $temp_backup_dir"
+
+    # Effectuer la sauvegarde de la base de données
+    cp "$db_file" "$temp_backup_dir/${db_name}.db"
+
+    create_tar_archive "$local_backup_path" "${db_name}.db" "$backup_datetime" "${backup_datetime}_${db_name}.tar.gz"
 }
 
 # Créer une archive tar.gz avec la date et l'heure dans le nom du fichier
 function create_tar_archive() {
     local local_backup_path="$1"
-    local db_name="$2"
+    local temp_file_name="$2"
     local backup_datetime="$3"
     local backup_file="$4"
 
     cd "${local_backup_path}/database" || exit 1
-    tar -czf "$backup_file" "temp_${db_name}_${backup_datetime}/${db_name}.sql"
+    tar -czf "$backup_file" "temp_${db_name}_${backup_datetime}/${temp_file_name}"
 
     # Supprimer le répertoire temporaire
     rm -r "${local_backup_path}/database/temp_${db_name}_${backup_datetime}"
@@ -250,6 +276,7 @@ function cleanup_old_backups() {
 # Fonction principale du script
 function main() {
     check_config_file
+    parse_command_line_options
     read_config_and_backup
     echo "Toutes les sauvegardes ont été effectuées avec succès."
 }
