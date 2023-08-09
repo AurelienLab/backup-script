@@ -115,11 +115,11 @@ function process_section() {
         # Appeler la fonction pour sauvegarder les dossiers spécifiés
         backup_folders "$folders_to_save" "$local_backup_path" "$backup_datetime"
 
-        # Transférer la sauvegarde vers le bucket S3
-        transfer_to_s3 "$local_backup_path" "$backup_file" "$s3_bucket_name" "$db_name"
-
         # Supprimer les anciennes versions de sauvegardes en gardant seulement les dernières N versions
         cleanup_old_backups "$local_backup_path" "$db_name" "$keep_versions"
+
+        # Transférer la sauvegarde vers le bucket S3
+        transfer_to_s3 "$local_backup_path" "$backup_file" "$s3_bucket_name" "$db_name"
 
         echo "Sauvegarde terminée pour la base de données : $db_name"
         echo "-------------------------------------------------"
@@ -234,7 +234,7 @@ function cleanup_old_backups() {
     local db_name="$2"
     local keep_versions="$3"
 
-    cd "$local_backup_path" || exit 1
+    cd "$local_backup_path/database" || exit 1
     backup_count=$(ls -1 | grep -E "^[0-9]{8}_[0-9]{6}_${db_name}.*\.tar\.gz$" | wc -l)
 
     if [ "$backup_count" -gt "$keep_versions" ]; then
@@ -243,6 +243,8 @@ function cleanup_old_backups() {
     else
         echo "Nombre de sauvegardes actuelles : $backup_count (Garder les dernières $keep_versions versions)"
     fi
+
+    cd - || exit 1
 }
 
 # Fonction principale du script
