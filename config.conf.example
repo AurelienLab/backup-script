@@ -3,14 +3,18 @@ DB_TYPE=mysql
 DB_NAME=example1_db
 DB_USER=mysql_user
 DB_PASSWORD=password-abc
+LOCAL_BACKUP_PATH=/home/backups/
 S3_BUCKET_NAME=s3vmedias:bucket-name1
 INTERVAL_DAYS=3
 FOLDER_TO_SAVE=
+KEEP_VERSIONS=3
 
 
 [example2]
 DB_TYPE=sqlite
 DB_FILE=/path/to/matomo/database.sqlite
+LOCAL_BACKUP_PATH=/home/backups/
 S3_BUCKET_NAME=s3vmedias:bucket-name2
 INTERVAL_DAYS=1
 FOLDER_TO_SAVE=
+KEEP_VERSIONS=7

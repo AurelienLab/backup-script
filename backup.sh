@@ -73,10 +73,10 @@ function process_section() {
     local section_name="$1"
     local section_content="$2"
     local db_name="$1"
-    local db_name=""
     local db_type=""
     local db_user=""
     local db_password=""
+    local db_file=""
 
     local backup_datetime="$(date +'%Y%m%d_%H%M%S')"
     local backup_file="${backup_datetime}_${db_name}.tar.gz"
@@ -95,6 +95,7 @@ function process_section() {
             DB_NAME) db_name="$value" ;;
             DB_TYPE) db_type="$value" ;;
             DB_USER) db_user="$value" ;;
+            DB_FILE) db_file="$value" ;;
             DB_PASSWORD) db_password="$value" ;;
             KEEP_VERSIONS) keep_versions="$value" ;;
             LOCAL_BACKUP_PATH) local_backup_path="$value" ;;
@@ -112,9 +113,6 @@ function process_section() {
         elif [ "$db_type" == "sqlite" ]; then
             backup_sqlite_database "$db_name" "$db_file" "$local_backup_path" "$backup_datetime"
         fi
-
-        # Créer une archive tar.gz avec la date et l'heure dans le nom du fichier
-        create_tar_archive "$local_backup_path" "$db_name" "$backup_datetime" "$backup_file"
 
         # Appeler la fonction pour sauvegarder les dossiers spécifiés
         backup_folders "$folders_to_save" "$local_backup_path" "$backup_datetime"
@@ -189,8 +187,8 @@ function backup_mysql_database() {
 function backup_sqlite_database() {
     local db_name="$1"
     local db_file="$2"
-    local local_backup_path="$4"
-    local backup_datetime="$5"
+    local local_backup_path="$3"
+    local backup_datetime="$4"
 
     # Créer un répertoire temporaire pour effectuer l'archivage
     local temp_backup_dir="${local_backup_path}/database/temp_${db_name}_${backup_datetime}"
@@ -214,7 +212,7 @@ function create_tar_archive() {
     local backup_file="$4"
 
     cd "${local_backup_path}/database" || exit 1
-    tar -czf "$backup_file" "temp_${db_name}_${backup_datetime}/${temp_file_name}"
+    tar -czf "$backup_file" --directory="temp_${db_name}_${backup_datetime}" "$temp_file_name"
 
     # Supprimer le répertoire temporaire
     rm -r "${local_backup_path}/database/temp_${db_name}_${backup_datetime}"
