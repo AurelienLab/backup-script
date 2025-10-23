@@ -248,7 +248,7 @@ function transfer_to_s3() {
     local db_name="$4"
 
     echo "Transfert de la sauvegarde vers S3..."
-    rclone --size-only sync "${local_backup_path}" "${s3_bucket_name}"
+    rclone --size-only sync "${local_backup_path}" "${s3_bucket_name}" --backup-dir "${s3_bucket_name}/trash"
 }
 
 # Supprimer les anciennes versions de sauvegardes en gardant seulement les dernières N versions
