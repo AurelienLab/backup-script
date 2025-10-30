@@ -1,6 +1,32 @@
 #!/bin/bash
 set -euo pipefail
 
+# -------------------------
+# Vérification des dépendances
+# -------------------------
+check_dependencies() {
+    local missing=()
+
+    for cmd in jq rclone rsync tar date; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            missing+=("$cmd")
+        fi
+    done
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "❌ Certaines dépendances sont manquantes :"
+        for m in "${missing[@]}"; do
+            echo "   - $m"
+        done
+        echo
+        echo "💡 Installe-les avant d’exécuter ce script."
+        echo "   Exemple (Debian/Ubuntu) : sudo apt install jq rclone rsync tar coreutils"
+        exit 1
+    fi
+}
+
+check_dependencies
+
 # ========================
 # BACKUP SCRIPT — V3
 # ========================
