@@ -18,3 +18,13 @@ S3_BUCKET_NAME=s3vmedias:bucket-name2
 INTERVAL_DAYS=1
 FOLDER_TO_SAVE=
 KEEP_VERSIONS=7
+
+[example3]
+LOCAL_BACKUP_PATH=/srv/backups/projet1
+S3_BUCKET_NAME=s3:backups/projet1
+INTERVAL_DAYS=1
+KEEP_VERSIONS=3
+
+# Dossiers à sauvegarder
+FOLDER_TO_SAVE=/var/www/site;/etc/nginx
+FILES_VERSIONED=true
